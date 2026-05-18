@@ -4,7 +4,7 @@ import fs from 'fs';
 import readline from 'readline-sync';
 
 // Configuration
-const SERVER_URL = 'http://ip-address:3001';
+const SERVER_URL = 'https://solana-server-ud9a.onrender.com';
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
@@ -33,6 +33,12 @@ interface SessionKeyResponse {
   expiresIn: number;
 }
 
+interface StakeActivation {
+  state: 'active' | 'inactive' | 'activating' | 'deactivating';
+  activationEpoch?: number;
+  deactivationEpoch?: number;
+}
+
 interface DelegationResponse {
   success: boolean;
   transactionSignature?: string;
@@ -40,6 +46,7 @@ interface DelegationResponse {
   delegatedTo?: string;
   lamportsDelegated?: number;
   stakingPeriod?: number;
+  stakeActivation?: StakeActivation;
   error?: string;
   details?: string;
 }
@@ -134,7 +141,7 @@ function loadPrivateKey(): Buffer {
     try {
       // Try to parse as Keypair (which expects base58 format from file or as string)
       const keypair = Keypair.fromSecretKey(Buffer.from(JSON.parse(privateKeyStr)));
-      privateKeyBuffer = keypair.secretKey;
+      privateKeyBuffer = Buffer.from(keypair.secretKey);
     } catch {
       // Try as hex
       try {
@@ -159,7 +166,7 @@ function loadPrivateKey(): Buffer {
     try {
       // Try parsing as JSON array (standard Solana format)
       const keypair = Keypair.fromSecretKey(Buffer.from(JSON.parse(fileContent)));
-      privateKeyBuffer = keypair.secretKey;
+      privateKeyBuffer = Buffer.from(keypair.secretKey);
     } catch {
       // Try as hex
       try {
@@ -289,9 +296,7 @@ function getStakingAmount(): number {
   console.log('║          Staking Amount                                        ║');
   console.log('╚════════════════════════════════════════════════════════════════╝\n');
 
-  const solAmount = readline.questionFloat('Enter amount of SOL to stake (e.g., 0.1): ', {
-    limitSymbols: true,
-  });
+  const solAmount = readline.questionFloat('Enter amount of SOL to stake (e.g., 0.1): ');
 
   if (solAmount <= 0) {
     throw new Error('Staking amount must be greater than 0');
@@ -323,7 +328,7 @@ Server: ${SERVER_URL}
     // Step 1: Check server health
     console.log('Checking server connection...');
     try {
-      const health = await makeRequest('/api/health', 'GET');
+      const health = await makeRequest<{ success: boolean }>('/api/health', 'GET');
       if (!health.success) {
         throw new Error('Server is not healthy');
       }
