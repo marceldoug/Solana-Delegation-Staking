@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.SERVER_PORT || 3001;
+const PORT = process.env.SERVER_PORT || 3000;
 
 // Solana Configuration
 /* ************************************************************************
@@ -15,7 +15,7 @@ const PORT = process.env.SERVER_PORT || 3001;
  * **** Default RPC URL removed to protect infrastructure endpoints.     ****
  * ************************************************************************
  */
-const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://****-REDACTED-PROVIDER-****.solana.com';
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
 // Session Management
