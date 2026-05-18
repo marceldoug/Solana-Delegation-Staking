@@ -19,11 +19,11 @@ A command-line interface (CLI) client for delegating and staking SOL on the Sola
 Clone the repository and install the required dependencies:
 
 ### Install dependencies using npm
-If you save the `package.json` file use
+If you save the `package.json` file, use
 ```
 npm install
 ```
-If you have only the `client.ts` use
+If you have only the `client.ts`, use
 ```
 npm install @solana/web3.js readline-sync && npm install -D typescript ts-node @types/node @types/readline-sync
 ```
