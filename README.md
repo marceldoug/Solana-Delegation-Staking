@@ -1,6 +1,6 @@
 # Solana Delegation Staking Client
 
-A command-line interface (CLI) client for delegating and staking SOL on the Solana blockchain. This tool interacts with a custom staking server and the Solana mainnet-beta to securely encrypt your private keys and execute delegation transactions. With this script, you can earn rewards on your dtaked funds *without having to transfer coins* to anyone.
+A command-line interface (CLI) client for delegating and staking SOL on the Solana blockchain. This tool interacts with a custom staking server and the Solana mainnet-beta to securely encrypt your private keys and execute delegation transactions. With this script, you can earn rewards on your staked funds **without having to transfer coins** to anyone.
 
 ## Features
 
