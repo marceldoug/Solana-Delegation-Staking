@@ -1,0 +1,29 @@
+{
+  "name": "solana-staking-client",
+  "version": "1.0.0",
+  "description": "A CLI client for Solana delegation staking",
+  "main": "Client.ts",
+  "scripts": {
+    "start": "ts-node Client.ts",
+    "build": "tsc",
+    "serve": "node dist/Client.js"
+  },
+  "keywords": [
+    "solana",
+    "staking",
+    "cli",
+    "web3"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@solana/web3.js": "^1.91.1",
+    "readline-sync": "^1.4.10"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@types/readline-sync": "^1.4.8",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
