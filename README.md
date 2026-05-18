@@ -18,7 +18,7 @@ A command-line interface (CLI) client for delegating and staking SOL on the Sola
 
 Clone the repository and install the required dependencies:
 
-# Install dependencies using npm
+### Install dependencies using npm
 If you save the `package.json` file use
 ```
 npm install
