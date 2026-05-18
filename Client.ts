@@ -4,7 +4,7 @@ import fs from 'fs';
 import readline from 'readline-sync';
 
 // Configuration
-const SERVER_URL = 'http://172.31.28.254:3001';
+const SERVER_URL = 'http://ip-address:3001';
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
