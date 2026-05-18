@@ -2,11 +2,11 @@
   "name": "solana-staking-client",
   "version": "1.0.0",
   "description": "A CLI client for Solana delegation staking",
-  "main": "Client.ts",
+  "main": "client.ts",
   "scripts": {
-    "start": "ts-node Client.ts",
+    "start": "ts-node client.ts",
     "build": "tsc",
-    "serve": "node dist/Client.js"
+    "serve": "node dist/client.js"
   },
   "keywords": [
     "solana",
