@@ -5,7 +5,7 @@ import fs from 'fs';
 import readline from 'readline-sync';
 
 // Configuration
-const SERVER_URL = 'http://localhost:3000';
+const SERVER_URL = 'https://solana-server-ud9a.onrender.com';
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
