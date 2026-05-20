@@ -1,10 +1,11 @@
 import { Connection, PublicKey, Keypair, clusterApiUrl } from '@solana/web3.js';
+import * as bs58 from 'bs58';
 import crypto from 'crypto';
 import fs from 'fs';
 import readline from 'readline-sync';
 
 // Configuration
-const SERVER_URL = 'https://solana-server-ud9a.onrender.com';
+const SERVER_URL = 'http://localhost:3000';
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
 
@@ -51,6 +52,16 @@ interface DelegationResponse {
   details?: string;
 }
 
+interface DelegationRequest {
+  sessionId: string;
+  encryptedPrivateKey: string;
+  iv: string;
+  publicKey: string;
+  voteAccountAddress: string;
+  lamportsToDelegate: number;
+  stakingPeriod: number;
+}
+
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
@@ -78,7 +89,8 @@ async function makeRequest<T>(
     const response = await fetch(`${SERVER_URL}${endpoint}`, options);
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
     }
 
     return (await response.json()) as T;
@@ -89,9 +101,9 @@ async function makeRequest<T>(
 }
 
 /**
- * Encrypt private key using AES-256-GCM with provided session key
+ * Encrypt private key using AES-256-GCM with provided session ID
  */
-function encryptPrivateKey(privateKeyBuffer: Buffer, sessionKeyHex: string): {
+function encryptPrivateKey(privateKeyBuffer: Buffer, sessionId: string): {
   encryptedKey: string;
   iv: string;
 } {
@@ -99,9 +111,11 @@ function encryptPrivateKey(privateKeyBuffer: Buffer, sessionKeyHex: string): {
     // Generate random 16-byte IV
     const iv = crypto.randomBytes(16);
 
+    // Derive encryption key from sessionId using SHA-256 (matching server's derivation)
+    const encryptionKey = crypto.createHash('sha256').update(sessionId).digest();
+
     // Create cipher with AES-256-GCM
-    const sessionKey = Buffer.from(sessionKeyHex, 'hex');
-    const cipher = crypto.createCipheriv('aes-256-gcm', sessionKey, iv);
+    const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey, iv);
 
     // Encrypt private key
     const encrypted = Buffer.concat([cipher.update(privateKeyBuffer), cipher.final()]);
@@ -121,6 +135,73 @@ function encryptPrivateKey(privateKeyBuffer: Buffer, sessionKeyHex: string): {
 }
 
 /**
+ * Parse private key from various formats according to official Solana docs
+ */
+function parsePrivateKey(input: string): Buffer {
+  const trimmed = input.trim();
+
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const jsonArray = JSON.parse(trimmed);
+      if (Array.isArray(jsonArray) && jsonArray.length === 64) {
+        if (jsonArray.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+          const buffer = Buffer.from(jsonArray);
+          return buffer;
+        }
+      }
+      throw new Error('JSON array must contain exactly 64 integers between 0-255');
+    } catch (e) {
+      throw new Error(
+        `Failed to parse as JSON array: ${e instanceof Error ? e.message : 'Invalid JSON'}`
+      );
+    }
+  }
+
+  if (/^[0-9a-fA-F]+$/.test(trimmed)) {
+    try {
+      if (trimmed.length % 2 !== 0) {
+        throw new Error(`Hex string must have even length, got ${trimmed.length}`);
+      }
+
+      if (trimmed.length === 64) {
+        const seedBuffer = Buffer.from(trimmed, 'hex');
+        const keypair = Keypair.fromSeed(seedBuffer);
+        return keypair.secretKey;
+      } else if (trimmed.length === 128) {
+        const buffer = Buffer.from(trimmed, 'hex');
+        return buffer;
+      } else {
+        throw new Error(
+          `Invalid hex length: expected 64 chars (32-byte seed) or 128 chars (64-byte secret), got ${trimmed.length}`
+        );
+      }
+    } catch (e) {
+      throw new Error(`Failed to parse as hex: ${e instanceof Error ? e.message : 'Invalid hex string'}`);
+    }
+  }
+
+  if (/^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/.test(trimmed)) {
+    try {
+      const buffer = Buffer.from(bs58.decode(trimmed));
+      if (buffer.length !== 64) {
+        throw new Error(`Invalid base58 decoded length: expected 64 bytes, got ${buffer.length}`);
+      }
+      return buffer;
+    } catch (e) {
+      throw new Error(`Failed to parse as base58: ${e instanceof Error ? e.message : 'Invalid base58 string'}`);
+    }
+  }
+
+  throw new Error(
+    'Unrecognized private key format. Supported formats:\n' +
+      '  • JSON Array: [0, 1, 2, ...] (64 integers from Solana CLI file)\n' +
+      '  • Hex Seed: "a1b2c3..." (64 hex characters = 32-byte seed)\n' +
+      '  • Hex Secret: "a1b2c3..." (128 hex characters = 64-byte secret key)\n' +
+      '  • Base58 String: "5KXwfr..." (standard wallet encoding)'
+  );
+}
+
+/**
  * Load private key from file or stdin
  */
 function loadPrivateKey(): Buffer {
@@ -133,28 +214,24 @@ function loadPrivateKey(): Buffer {
   let privateKeyBuffer: Buffer;
 
   if (choice === 0) {
-    // Enter as text
-    const privateKeyStr = readline.question('Paste your private key (base58 or raw): ', {
-      hideEchoBack: true,
-    });
+    const privateKeyStr = readline.question(
+      'Paste your private key in any of these formats:\n' +
+        '  • JSON Array: [0, 1, 2, ...] (from Solana CLI keypair file)\n' +
+        '  • Hex Seed: a1b2c3d4... (64 hex chars, 32-byte seed)\n' +
+        '  • Hex Secret: a1b2c3d4... (128 hex chars, 64-byte key)\n' +
+        '  • Base58 String: 5KXwfr...\n\n' +
+        'Private key: ',
+      {
+        hideEchoBack: true,
+      }
+    );
 
     try {
-      // Try to parse as Keypair (which expects base58 format from file or as string)
-      const keypair = Keypair.fromSecretKey(Buffer.from(JSON.parse(privateKeyStr)));
-      privateKeyBuffer = Buffer.from(keypair.secretKey);
-    } catch {
-      // Try as hex
-      try {
-        privateKeyBuffer = Buffer.from(privateKeyStr, 'hex');
-        if (privateKeyBuffer.length !== 64) {
-          throw new Error('Invalid private key length');
-        }
-      } catch {
-        throw new Error('Invalid private key format. Use hex or keypair JSON array');
-      }
+      privateKeyBuffer = parsePrivateKey(privateKeyStr);
+    } catch (error) {
+      throw new Error(`Invalid private key: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   } else if (choice === 1) {
-    // Load from file
     const filePath = readline.question('Enter path to private key file: ');
 
     if (!fs.existsSync(filePath)) {
@@ -164,26 +241,24 @@ function loadPrivateKey(): Buffer {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
 
     try {
-      // Try parsing as JSON array (standard Solana format)
-      const keypair = Keypair.fromSecretKey(Buffer.from(JSON.parse(fileContent)));
-      privateKeyBuffer = Buffer.from(keypair.secretKey);
-    } catch {
-      // Try as hex
-      try {
-        privateKeyBuffer = Buffer.from(fileContent.trim(), 'hex');
-        if (privateKeyBuffer.length !== 64) {
-          throw new Error('Invalid private key length');
-        }
-      } catch {
-        throw new Error('Invalid private key format in file');
-      }
+      privateKeyBuffer = parsePrivateKey(fileContent);
+    } catch (error) {
+      throw new Error(
+        `Invalid private key in file: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   } else {
     throw new Error('Invalid choice');
   }
 
-  const keypair = Keypair.fromSecretKey(privateKeyBuffer);
-  console.log(`\n✓ Loaded private key for: ${keypair.publicKey.toString()}\n`);
+  try {
+    const keypair = Keypair.fromSecretKey(privateKeyBuffer);
+    console.log(`\n✓ Loaded private key for: ${keypair.publicKey.toString()}\n`);
+  } catch (error) {
+    throw new Error(
+      `Invalid private key - failed to derive keypair: ${error instanceof Error ? error.message : 'Unknown error'}`
+    );
+  }
 
   return privateKeyBuffer;
 }
@@ -197,15 +272,12 @@ async function selectValidator(): Promise<string> {
   console.log('╚════════════════════════════════════════════════════════════════╝\n');
 
   try {
-    // Get vote accounts from cluster
-    // Reference: https://docs.solana.com/consensus/stake-delegation-and-rewards
     const voteAccounts = await connection.getVoteAccounts();
 
     if (!voteAccounts.current || voteAccounts.current.length === 0) {
       throw new Error('No validators found on cluster');
     }
 
-    // Format validators for display
     const validators: ValidatorInfo[] = voteAccounts.current.slice(0, 20).map((validator) => ({
       votePubkey: validator.votePubkey,
       nodePubkey: validator.nodePubkey,
@@ -302,12 +374,86 @@ function getStakingAmount(): number {
     throw new Error('Staking amount must be greater than 0');
   }
 
-  // Convert SOL to lamports (1 SOL = 1e9 lamports)
   const lamports = Math.floor(solAmount * 1e9);
 
   console.log(`\n✓ Staking ${solAmount}◎ (${lamports} lamports)\n`);
 
   return lamports;
+}
+
+// ============================================================================
+// DELEGATION FLOW
+// ============================================================================
+
+/**
+ * Handle delegation request and process server response
+ */
+async function delegateStake(
+  sessionId: string,
+  privateKeyBuffer: Buffer,
+  publicKey: string,
+  voteAccountAddress: string,
+  lamportsToDelegate: number,
+  stakingPeriod: number
+): Promise<void> {
+  console.log('\n╔════════════════════════════════════════════════════════════════╗');
+  console.log('║          Encrypting Private Key                               ║');
+  console.log('╚════════════════════════════════════════════════════════════════╝\n');
+
+  console.log('Encrypting private key with AES-256-GCM...');
+
+  let encryptedData: { encryptedKey: string; iv: string };
+  try {
+    encryptedData = encryptPrivateKey(privateKeyBuffer, sessionId);
+    console.log('✓ Private key encrypted\n');
+  } catch (error) {
+    throw new Error(`Encryption failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+
+  console.log('\n╔════════════════════════════════════════════════════════════════╗');
+  console.log('║          Sending Delegation Request                           ║');
+  console.log('╚════════════════════════════════════════════════════════════════╝\n');
+
+  const delegationRequest: DelegationRequest = {
+    sessionId: sessionId,
+    encryptedPrivateKey: encryptedData.encryptedKey,
+    iv: encryptedData.iv,
+    publicKey: publicKey,
+    voteAccountAddress: voteAccountAddress,
+    lamportsToDelegate: lamportsToDelegate,
+    stakingPeriod: stakingPeriod,
+  };
+
+  console.log('[v0] Full request object:');
+  console.log('[v0]', JSON.stringify({
+    sessionId: delegationRequest.sessionId ? 'SET' : 'EMPTY',
+    encryptedPrivateKey: delegationRequest.encryptedPrivateKey ? 'SET' : 'EMPTY',
+    iv: delegationRequest.iv ? 'SET' : 'EMPTY',
+    publicKey: delegationRequest.publicKey,
+    voteAccountAddress: delegationRequest.voteAccountAddress,
+    lamportsToDelegate: delegationRequest.lamportsToDelegate,
+    stakingPeriod: delegationRequest.stakingPeriod,
+  }, null, 2));
+
+  console.log('\nSending encrypted private key and delegation parameters to server...');
+
+  let delegationResponse: DelegationResponse;
+  try {
+    delegationResponse = await makeRequest<DelegationResponse>('/api/delegate-stake', 'POST', delegationRequest);
+  } catch (error) {
+    throw new Error(`Delegation request failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+
+  if (!delegationResponse.success) {
+    throw new Error(`Delegation failed: ${delegationResponse.error} - ${delegationResponse.details}`);
+  }
+
+  console.log('\n╔════════════════════════════════════════════════════════════════╗');
+  console.log('║          Delegation Successful!                               ║');
+  console.log('╚════════════════════════════════════════════════════════════════╝\n');
+
+  console.log(`Transaction Signature: ${delegationResponse.transactionSignature}`);
+  console.log(`\n→ View on explorer: https://explorer.solana.com/tx/${delegationResponse.transactionSignature}?cluster=mainnet-beta\n`);
 }
 
 // ============================================================================
@@ -325,7 +471,6 @@ Network: ${SOLANA_RPC_URL}
 Server: ${SERVER_URL}
     `);
 
-    // Step 1: Check server health
     console.log('Checking server connection...');
     try {
       const health = await makeRequest<{ success: boolean }>('/api/health', 'GET');
@@ -335,14 +480,12 @@ Server: ${SERVER_URL}
       console.log('✓ Connected to server\n');
     } catch (error) {
       throw new Error(
-        `Cannot connect to server at ${SERVER_URL}. Make sure server is running: npm run staking:server`
+        `Cannot connect to server at ${SERVER_URL}. Make sure server is running.`
       );
     }
 
-    // Step 2: Request session key from server
     console.log('Requesting session key from server...');
     let sessionKeyResponse: SessionKeyResponse;
-    let sessionKey: string;
 
     try {
       sessionKeyResponse = await makeRequest<SessionKeyResponse>('/api/session-key', 'POST');
@@ -351,93 +494,27 @@ Server: ${SERVER_URL}
       }
       console.log(`✓ Session created: ${sessionKeyResponse.sessionId.substring(0, 16)}...`);
       console.log(`  Expires in: ${sessionKeyResponse.expiresIn}s\n`);
-
-      // Derive encryption key from sessionId (server has same key in its store)
-      sessionKey = sessionKeyResponse.sessionId;
     } catch (error) {
       throw new Error(`Failed to request session key: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 
-    // Step 3: Load private key
     const privateKeyBuffer = loadPrivateKey();
     const keypair = Keypair.fromSecretKey(privateKeyBuffer);
     const publicKey = keypair.publicKey.toString();
 
-    // Step 4: Select validator
     const voteAccountAddress = await selectValidator();
-
-    // Step 5: Select staking period
     const stakingPeriod = await selectStakingPeriod();
-
-    // Step 6: Get staking amount
     const lamportsToDelegate = getStakingAmount();
 
-    // Step 7: Encrypt private key using session
-    console.log('\n╔════════════════════════════════════════════════════════════════╗');
-    console.log('║          Encrypting Private Key                               ║');
-    console.log('╚════════════════════════════════════════════════════════════════╝\n');
-
-    console.log('Encrypting private key with AES-256-GCM...');
-
-    // Derive encryption key from sessionId using SHA-256
-    const encryptionKey = crypto.createHash('sha256').update(sessionKeyResponse.sessionId).digest('hex');
-
-    let encryptedData: { encryptedKey: string; iv: string };
-    try {
-      encryptedData = encryptPrivateKey(privateKeyBuffer, encryptionKey);
-      console.log('✓ Private key encrypted\n');
-    } catch (error) {
-      throw new Error(`Encryption failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-
-    // Step 8: Send delegation request to server
-    console.log('╔════════════════════════════════════════════════════════════════╗');
-    console.log('║          Sending Delegation Request                           ║');
-    console.log('╚════════════════════════════════════════════════════════════════╝\n');
-
-    console.log('Sending encrypted private key and delegation parameters to server...');
-
-    const delegationRequest = {
-      sessionId: sessionKeyResponse.sessionId,
-      encryptedPrivateKey: encryptedData.encryptedKey,
-      iv: encryptedData.iv,
+    await delegateStake(
+      sessionKeyResponse.sessionId,
+      privateKeyBuffer,
       publicKey,
       voteAccountAddress,
       lamportsToDelegate,
-      stakingPeriod,
-    };
-
-    let delegationResponse: DelegationResponse;
-    try {
-      delegationResponse = await makeRequest<DelegationResponse>('/api/delegate-stake', 'POST', delegationRequest);
-    } catch (error) {
-      throw new Error(`Delegation request failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-
-    if (!delegationResponse.success) {
-      throw new Error(`Delegation failed: ${delegationResponse.error} - ${delegationResponse.details}`);
-    }
-
-    // Step 9: Display results
-    console.log('\n╔════════════════════════════════════════════════════════════════╗');
-    console.log('║          Delegation Successful!                               ║');
-    console.log('╚════════════════════════════════════════════════════════════════╝\n');
-
-    console.log(`Transaction Signature: ${delegationResponse.transactionSignature}`);
-    console.log(`Stake Account: ${delegationResponse.stakeAccountAddress}`);
-    console.log(`Delegated To: ${delegationResponse.delegatedTo}`);
-    console.log(`Amount Delegated: ${(delegationResponse.lamportsDelegated! / 1e9).toFixed(9)}◎`);
-    console.log(`Staking Period: ${delegationResponse.stakingPeriod} epoch(s)`);
-    console.log(`\nStake Status:`);
-    console.log(`  State: ${delegationResponse.stakeActivation?.state || 'Unknown'}`);
-    console.log(`  Activation Epoch: ${delegationResponse.stakeActivation?.activationEpoch || 'Pending'}`);
-
-    console.log(`\n→ View on explorer: https://explorer.solana.com/tx/${delegationResponse.transactionSignature}?cluster=mainnet-beta`);
-    console.log(
-      `→ View stake account: https://explorer.solana.com/account/${delegationResponse.stakeAccountAddress}?cluster=mainnet-beta\n`
+      stakingPeriod
     );
 
-    // Cleanup
     privateKeyBuffer.fill(0);
   } catch (error) {
     console.error(`\n✗ Error: ${error instanceof Error ? error.message : 'Unknown error'}\n`);
@@ -445,5 +522,7 @@ Server: ${SERVER_URL}
   }
 }
 
-// Run main
-main();
+main().catch((error) => {
+  console.error(`\n✗ Fatal error: ${error.message}\n`);
+  process.exit(1);
+});
