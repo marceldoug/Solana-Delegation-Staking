@@ -25,7 +25,7 @@ npm install
 ```
 If you have only the `client.ts`, use
 ```
-npm install @solana/web3.js readline-sync && npm install -D typescript ts-node @types/node @types/readline-sync
+npm install @solana/web3.js bs58 readline-sync typescript ts-node @types/node
 ```
 
 ## Running the script 
